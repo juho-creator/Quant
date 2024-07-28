@@ -9,7 +9,7 @@ import time
 from tqdm import tqdm
 from pprint import pprint
 
-
+### 네이버 증권에서 데이터 크롤링
 def kosdaq_symbols():
     # 한국투자증권 코스닥 종목코드
     kosdaq = r'C:\Users\me\Downloads\주식 종목코드\kosdaq_code.txt'
@@ -156,4 +156,155 @@ save_at_db(kosdaq,"kosdaq")
 # Save kospi & kosdaq price
 db_to_csv("kospi_price")
 db_to_csv("kosdaq_price")
+
+
+
+
+
+##### KRX에서 데이터 크롤링
+import pandas as pd
+from io import BytesIO
+import requests as rq
+import re
+from pprint import pprint
+from datetime import datetime, timedelta
+
+
+
+filename = 'kosdaq_code.txt'
+
+# For searching ISIN of each code
+def extract_isin(stock_code, filename):
+    with open(filename, 'r', encoding='euc-kr') as file:
+        for line in file:
+            # Match the stock code and extract the ISIN
+            match = re.match(rf'({stock_code})\s+([A-Z0-9]+)', line)
+            if match:
+                return match.group(2)[:12]
+    return None
+
+# Crawl price data 
+def data_crawl(data):
+
+    headers = {
+        'Referer': 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020506',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    }
+
+    all_data = []
+
+    # Generate OTP and download CSV for each year
+    with rq.Session() as s:
+        gen_otp_url = 'http://data.krx.co.kr/comm/fileDn/GenerateOTP/generate.cmd'
+        down_url = 'http://data.krx.co.kr/comm/fileDn/download_csv/download.cmd'
+
+        start_date = datetime.strptime(data['strtDd'], '%Y%m%d')
+        end_date = datetime.strptime(data['endDd'], '%Y%m%d')
+
+        while start_date <= end_date:
+            year_start = start_date.strftime('%Y%m%d')
+            year_end = (start_date + timedelta(days=364)).strftime('%Y%m%d')
+
+            # Adjust the end date if it exceeds the overall end date
+            if datetime.strptime(year_end, '%Y%m%d') > end_date:
+                year_end = end_date.strftime('%Y%m%d')
+
+            data['strtDd'] = year_start
+            data['endDd'] = year_end
+
+            otp_ksq = s.post(gen_otp_url, data, headers=headers).text
+            down_sector = s.post(down_url, {'code': otp_ksq}, headers=headers)
+            sector = pd.read_csv(BytesIO(down_sector.content), encoding='EUC-KR')
+
+            all_data.append(sector)
+            start_date += timedelta(days=365)
+
+    # Combine all dataframes
+    combined_data = pd.concat(all_data, ignore_index=True)
+
+    # Sort by date
+    combined_data.sort_values(by='일자', inplace=True)
+    combined_data['종목코드'] = data['tboxisuCd_finder_stkisu0_3']
+
+    print(f'Created {data["codeNmisuCd_finder_stkisu0_3"]}')
+    
+    return combined_data
+
+
+# 표준편차 = 평균이윤 = 0인 모든 종목
+kosdaq_stock = {
+    '064520': '테크엘',
+    '065420': '에스아이리소스',
+    '257370': '피엔티엠에스',
+    '083470': '이엠앤아이',
+    '950160': '코오롱티슈진',
+    '056730': 'CNT85',
+    '052770': '아이톡시',
+    '263540': '어스앤에어로스페이스',
+    '208860': '엔지스테크널러지',
+    '038340': 'MIT',
+    '180400': 'DXVX',
+    '099520': 'ITX-AI',
+    '160600': '이큐셀',
+    '043590': '웰킵스하이텍',
+    '115530': '씨엔플러스',
+    '033340': '좋은사람들',
+    '054220': '비츠로시스',
+    '106080': '하이소닉',
+    '002290': '삼일기업공사',
+    '178780': '일월지엠엘',
+    '138360': '협진',
+    '024830': '세원물산'
+}
+
+
+# 종목 1개에 대한 5년치 가격 데이터
+data_stock_price = {
+    'tboxisuCd_finder_stkisu0_3': '064520/테크엘',
+    'isuCd': 'KR7064520000',
+    # 'isuCd2': 'KR7005930003',
+    'codeNmisuCd_finder_stkisu0_3': '테크엘',
+    'param1isuCd_finder_stkisu0_3': 'ALL',
+    'strtDd': '20190726',
+    'endDd': '20240726',
+    'adjStkPrc_check': 'Y',
+    'adjStkPrc': '2',
+    'share': '1',
+    'money': '1',
+    'csvxls_isNo': 'false',
+    'name': 'fileDown',
+    'url' : 'dbms/MDC/STAT/standard/MDCSTAT01701'
+}
+
+# Initialize an empty DataFrame
+all_stocks_data = pd.DataFrame()
+
+# 모든 종목에 대한 5년치 가격 데이터 가져오기  
+for stock in kosdaq_stock:
+    data_stock_price = {
+        'tboxisuCd_finder_stkisu0_3': f'{stock}',
+        'isuCd': f'{extract_isin(stock,filename)}',
+        'codeNmisuCd_finder_stkisu0_3': f'{kosdaq_stock[stock]}',
+        'param1isuCd_finder_stkisu0_3': 'ALL',
+        'strtDd': '20190726',
+        'endDd': '20240726',
+        'adjStkPrc_check': 'Y',
+        'adjStkPrc': '2',
+        'share': '1',
+        'money': '1',
+        'csvxls_isNo': 'false',
+        'name': 'fileDown',
+        'url' : 'dbms/MDC/STAT/standard/MDCSTAT01701'
+    }
+
+
+    sector_data = data_crawl(data_stock_price)
+
+    # Concatenate the data to the all_stocks_data DataFrame
+    all_stocks_data = pd.concat([all_stocks_data, sector_data], ignore_index=True)
+
+
+# Save the combined data to a CSV file
+all_stocks_data.to_csv('all_kosdaq_stocks_data.csv', index=False, encoding='utf-8-sig')
+print('Created all_kosdaq_stocks_data.csv')
 
